@@ -1,52 +1,23 @@
-{-
-Monadic interface for composing pictures with the Gloss library.
--}
+-- Monadic interface for drawing pictures with Gloss
 
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE TupleSections #-}
+
 module Draw where
 
-import           Data.List                      ( sortOn )
-import           Data.Maybe                     ( fromMaybe )
-import           Graphics.Gloss                 ( BitmapData
-                                                , Color
-                                                , Path
-                                                , Picture
-                                                , Rectangle
-                                                , arc
-                                                , arcSolid
-                                                , bitmap
-                                                , bitmapSection
-                                                , blank
-                                                , circle
-                                                , circleSolid
-                                                , color
-                                                , line
-                                                , lineLoop
-                                                , pictures
-                                                , polygon
-                                                , rectangleSolid
-                                                , rectangleUpperSolid
-                                                , rectangleUpperWire
-                                                , rectangleWire
-                                                , rotate
-                                                , scale
-                                                , sectorWire
-                                                , text
-                                                , thickArc
-                                                , thickCircle
-                                                , translate
-                                                )
+import           Data.List
+import           Data.Maybe
+import           Graphics.Gloss
 
 type PicID = Int
 
 data AppMode
-    = ApplyToPicture -- transformations are applied to the last picture in drawStatePics
-    | ApplyToGroup [PicID] -- transformation are applied to pictures with specified ids
+    = ApplyToLast
+    | ApplyToGroup [PicID]
 
 data DrawState = DrawState
-    { drawStatePics :: [(Picture, PicID)]
-    , drawStateMode :: AppMode
+    { picStack :: [(Picture, PicID)]
+    , appMode  :: AppMode
     }
 
 newtype Draw a = Draw { runDraw :: DrawState -> (a, DrawState) }
@@ -62,52 +33,39 @@ instance Applicative Draw where
 
 instance Monad Draw where
     da >>= adb = Draw $ \s ->
-        let (a, s')  = runDraw da s
-            db       = adb a
-            (b, s'') = runDraw db s'
-        in  (b, s'')
+        let (a, s') = runDraw da s
+            db      = adb a
+        in  runDraw db s'
 
-{-
-extract the whole picture from the monadic context
--}
 render :: Draw a -> Picture
-render da = pictures . reverse . map fst . drawStatePics . snd $ runDraw
+render da = pictures . reverse . map fst . picStack . snd $ runDraw
     da
-    (DrawState [] ApplyToPicture)
+    (DrawState [] ApplyToLast)
 
-{-
-Adds a new picture to the stack and sets the mode to ApplyToPicture.
-Returns the id of the added picture.
-Subsequent transformations will be applied to the last added picture.
--}
+renderM :: Draw a -> Draw PicID
+renderM = draw . render
+
 draw :: Picture -> Draw PicID
 draw pic = Draw $ \s ->
-    let pics = drawStatePics s
+    let pics = picStack s
         id   = if null pics then 0 else 1 + snd (head pics)
-    in  (id, DrawState ((pic, id) : pics) ApplyToPicture)
+    in  (id, DrawState ((pic, id) : pics) ApplyToLast)
 
-{-
-Sets the mode to ApplyToGroup.
-Subsequent transformations will be applied to pictures with specified ids.
--}
 group :: [PicID] -> Draw ()
-group ids = Draw $ \s -> ((), s { drawStateMode = ApplyToGroup $ sortDec ids })
+group ids = Draw $ \s -> ((), s { appMode = ApplyToGroup $ sortDec ids })
     where sortDec = sortOn (0 -)
 
-{-
-Applies a transformation according to the current drawStateMode.
--}
 app :: (Picture -> Picture) -> Draw ()
 app f = Draw $ \s ->
-    let pics  = drawStatePics s
-        mode  = drawStateMode s
+    let pics  = picStack s
+        mode  = appMode s
         pics' = case mode of
-            ApplyToPicture   -> applyToHead f pics
+            ApplyToLast      -> applyToLast f pics
             ApplyToGroup ids -> applyToGroup ids f pics
-    in  ((), s { drawStatePics = pics' })
+    in  ((), s { picStack = pics' })
   where
-    applyToHead _ []                 = []
-    applyToHead f ((pic, id) : pics) = (f pic, id) : pics
+    applyToLast _ []                 = []
+    applyToLast f ((pic, id) : pics) = (f pic, id) : pics
 
     applyToGroup [] _ pics = pics
     applyToGroup _  _ []   = []
@@ -115,28 +73,24 @@ app f = Draw $ \s ->
         | id1 == id2 = (f pic, id2) : applyToGroup ids f pics
         | otherwise  = (pic, id2) : applyToGroup (id1 : ids) f pics
 
-{-
-Returns the (Maybe Picture) with specified ID,
-or Nothing if no such picture exists on the stack.
--}
-lookupID :: PicID -> Draw (Maybe Picture)
-lookupID id = Draw
-    $ \s -> let pics = drawStatePics s in (lookupPicWithID pics id, s)
+lookupId :: PicID -> Draw (Maybe Picture)
+lookupId id = Draw
+    $ \s -> let pics = picStack s in (lookupPicWithID pics id, s)
   where
     lookupPicWithID [] _ = Nothing
     lookupPicWithID ((pic, id1) : pics) id | id1 == id = Just pic
                                            | otherwise = lookupPicWithID pics id
 
-{-
-Returns the picture with specified ID.
-Throws an error if no such picture is found.
--}
-withID :: PicID -> Draw Picture
-withID id =
+withId :: PicID -> Draw Picture
+withId id =
     let err = error $ "No picture with ID = " ++ show id
-    in  fromMaybe err <$> lookupID id
+    in  fromMaybe err <$> lookupId id
 
--- Monadic counterparts to gloss primitives and transformations
+drawId :: PicID -> Draw PicID
+drawId id = do
+    p <- withId id
+    draw p
+
 blankM :: Draw PicID
 blankM = draw blank
 
@@ -182,7 +136,6 @@ scaleM f1 f2 = app $ scale f1 f2
 picturesM :: [Picture] -> Draw PicID
 picturesM = draw . pictures
 
--- monadic counterparts to gloss compound shapes
 lineLoopM :: Path -> Draw PicID
 lineLoopM = draw . lineLoop
 
@@ -207,14 +160,8 @@ rectangleUpperWireM f1 f2 = draw $ rectangleUpperWire f1 f2
 rectangleUpperSolidM :: Float -> Float -> Draw PicID
 rectangleUpperSolidM f1 f2 = draw $ rectangleUpperSolid f1 f2
 
--- Custom primitives and transformations
-
-{-
-rotates a picture around a point
--}
 rotateAround :: Float -> Float -> Float -> Picture -> Picture
 rotateAround x y a pic = translate x y $ rotate a $ translate (-x) (-y) pic
 
 rotateAroundM :: Float -> Float -> Float -> Draw ()
 rotateAroundM x y a = app $ rotateAround x y a
-
