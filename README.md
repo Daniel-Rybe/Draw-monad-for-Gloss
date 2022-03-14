@@ -5,3 +5,4 @@ This is a simple monadic interface, to  make drawing pictures with Gloss a littl
   * draw and transform pictures on different layers
   * group pictures for bulk transformations
 ### Result of running the Main module
+![alt text](https://github.com/Daniel-Rybe/Draw-monad-for-Gloss/blob/main/result.png)
