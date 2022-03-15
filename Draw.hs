@@ -1,10 +1,11 @@
 -- Monadic interface for drawing pictures with Gloss
 
-{-# LANGUAGE DeriveFunctor #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE DerivingVia #-}
 
 module Draw where
 
+import           Control.Monad.Trans.State
+import           Data.Functor.Identity
 import           Data.List
 import           Data.Maybe
 import           Graphics.Gloss
@@ -21,21 +22,7 @@ data DrawState = DrawState
     }
 
 newtype Draw a = Draw { runDraw :: DrawState -> (a, DrawState) }
-    deriving Functor
-
-instance Applicative Draw where
-    pure a = Draw (a, )
-    dab <*> da = Draw $ \s ->
-        let (ab, s' ) = runDraw dab s
-            (a , s'') = runDraw da s'
-            b         = ab a
-        in  (b, s'')
-
-instance Monad Draw where
-    da >>= adb = Draw $ \s ->
-        let (a, s') = runDraw da s
-            db      = adb a
-        in  runDraw db s'
+    deriving (Functor, Applicative, Monad) via State DrawState
 
 render :: Draw a -> Picture
 render da = pictures . reverse . map fst . picStack . snd $ runDraw
